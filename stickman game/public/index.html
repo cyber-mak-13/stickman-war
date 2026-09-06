@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Stickman TD — 3D Tower Defense PVP</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; font-family:system-ui,sans-serif; }
+  body { background:#0b0e14; color:#e6e6e6; overflow:hidden; }
+  #ui { position:absolute; top:10px; left:10px; z-index:10; background:rgba(0,0,0,.55);
+        padding:10px 14px; border-radius:10px; border:1px solid #2a2f3a; font-size:14px; }
+  #ui button { background:#3b82f6; color:#fff; border:none; padding:6px 12px; border-radius:6px;
+               cursor:pointer; margin:2px; }
+  #ui button:hover { background:#2563eb; }
+  #hud { position:absolute; top:10px; right:10px; text-align:right; z-index:10;
+         background:rgba(0,0,0,.55); padding:8px 12px; border-radius:10px; border:1px solid #2a2f3a; }
+  #buildbar { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); z-index:10;
+              display:flex; gap:10px; background:rgba(0,0,0,.6); padding:10px 14px; border-radius:12px; }
+  .card { border:1px solid #2a2f3a; border-radius:8px; padding:8px 12px; cursor:pointer; text-align:center;
+          min-width:90px; background:#151a24; transition:.15s; }
+  .card:hover { border-color:#3b82f6; transform:translateY(-2px); }
+  .card .cost { color:#fbbf24; }
+  .card.sel { border-color:#22d3ee; box-shadow:0 0 12px #22d3ee66; }
+  #log { position:absolute; bottom:90px; left:16px; font-size:12px; color:#9ca3af; z-index:9; }
+  .dead { color:#f87171; }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div><b>⚔️ Stickman TD PVP</b></div>
+  <div style="margin-top:6px">
+    <button onclick="modeSolo()">▶ Solo vs AI</button>
+    <button id="pvpBtn" onclick="pvpMatch()">🌐 Find PVP Match</button>
+    <button onclick="toggleWaves()">Start Next Wave</button>
+  </div>
+</div>
+
+<div id="hud">
+  <div>💰 <span id="gold">100</span></div>
+  <div>❤️ <span id="lives">10</span></div>
+  <div>👾 Wave <span id="wave">0</span> / <span id="lives2">-</span></div>
+</div>
+
+<div id="buildbar">
+  <div class="card" data-idx="0" onclick="selectTower(0)">🏹 Archer<br><span class="cost">50g</span></div>
+  <div class="card" data-idx="1" onclick="selectTower(1)">🔥 Cannon<br><span class="cost">100g</span></div>
+  <div class="card" data-idx="2" onclick="selectTower(2)">❄️ Frost<br><span class="cost">150g</span></div>
+</div>
+
+<div id="log"></div>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+import { io } from 'https://unpkg.com/socket.io@4.7.5/client-dist/socket.io.esm.min.js';
+
+// ================= CONFIG =================
+const COSTS   = [50, 100, 150];
+const TOWER_NAME = ['Archer','Cannon','Frost'];
+const RANGE   = [2.5, 3.2, 2.2];
+const FIRE_CD = [0.8, 2.2, 1.4]; // seconds between shots
+const DMG     = [8, 22, 4];
+const SLOW    = [0, 0, 0.45];
+// Path: waypoints the creeps follow
+const PATH = [
+  new THREE.Vector3(-9, 0,  9),
+  new THREE.Vector3(-9, 0, -2),
+  new THREE.Vector3( 0, 0, -2),
+  new THREE.Vector3( 0, 0, -9),
+  new THREE.Vector3( 9, 0, -9),
+  new THREE.Vector3( 9, 0,  2),
+  new THREE.Vector3( 2, 0,  2),
+];
+
+// ================= STATE =================
+let scene, camera, renderer, controls;
+let towers = [];      // { mesh, type, target, cd }
+let creeps = [];      // { mesh, hp, maxHp, speed, wpIndex, slowUntil }
+let bullets = [];
+let pathPoints = [];
+let gold = 100, lives = 10, wave = 0, spawnCount = 0;
+let spawnTimer = 0, auto = false;
+let selected = 0;
+let socket = null, inPvp = false;
+let myLayout = [];    // tower types placed (for PVP submission)
+const terrain = [];
+
+// ================= INIT =================
+function init() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b0e14);
+  scene.fog = new THREE.Fog(0x0b0e14, 30, 60);
+
+  camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 200);
+  camera.position.set(14, 18, 14);
+
+  renderer = new THREE.WebGLRenderer({ antialias:true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.shadowMap.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 0, 0);
+  controls.maxPolarAngle = Math.PI/2.2;
+  controls.update();
+
+  // Lights
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x334, 1.0));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+  sun.position.set(8, 20, 6); sun.castShadow = true; scene.add(sun);
+
+  buildGround();
+  buildPath();
+  buildDecor();
+
+  window.addEventListener('resize', onResize);
+  renderer.domElement.addEventListener('click', onCanvasClick);
+  animate();
+  log('Build towers on the path. Click a creep-path tile.');
+}
+
+function buildGround() {
+  const geo = new THREE.PlaneGeometry(26, 26);
+  const mat = new THREE.MeshStandardMaterial({ color:0x17351f, roughness:1 });
+  const g = new THREE.Mesh(geo, mat);
+  g.rotation.x = -Math.PI/2; g.receiveShadow = true; scene.add(g);
+  const grid = new THREE.GridHelper(26, 26, 0x2a4a35, 0x1d3026);
+  scene.add(grid);
+}
+
+function buildPath() {
+  const pts = PATH.map(p => p.clone());
+  const curve = new THREE.CatmullRomCurve3(pts);
+  pathPoints = curve.getPoints(120);
+
+  const geo = new THREE.TubeGeometry(curve, 120, 0.45, 8, false);
+  const mat = new THREE.MeshStandardMaterial({ color:0x8a6a3a, roughness:1 });
+  const tube = new THREE.Mesh(geo, mat);
+  tube.receiveShadow = true; scene.add(tube);
+}
+
+function buildDecor() {
+  // simple rocks/stick figures around the map
+  const rockGeo = new THREE.DodecahedronGeometry(0.4);
+  for (let i=0;i<40;i++){
+    const r = new THREE.Mesh(rockGeo, new THREE.MeshStandardMaterial({color:0x555555}));
+    const a = Math.random()*Math.PI*2, d = 4 + Math.random()*8;
+    const x=Math.cos(a)*d, z=Math.sin(a)*d;
+    // keep off path roughly
+    r.position.set(x, 0.3, z); r.scale.y=0.6;
+    scene.add(r);
+  }
+  // place 5 stickmen sentinels
+  for(let i=0;i<5;i++){
+    const a = Math.random()*Math.PI*2, d = 3+Math.random()*10;
+    makeStickman(new THREE.Vector3(Math.cos(a)*d,0,Math.sin(a)*d), 0xdddddd, 0.8);
+  }
+}
+
+function makeStickman(pos, color, s=1){
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color });
+  const limb = (dx,dy,dz) => {
+    const m=new THREE.Mesh(new THREE.CapsuleGeometry(0.05*s,0.5*s,2,6),mat);
+    m.position.set(dx*s,dy*s,dz*s); return m;
+  };
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.14*s),mat); head.position.y=1.05*s;
+  g.add(head);
+  g.add(limb(0,0.45,0));           // body
+  g.add(limb(-0.3,0.7,0).rotateZ(0.3)); // left arm
+  g.add(limb( 0.3,0.7,0).rotateZ(-0.3));// right arm
+  g.add(limb(-0.18,0.15,0));       // left leg
+  g.add(limb( 0.18,0.15,0));       // right leg
+  g.position.copy(pos); scene.add(g);
+  return g;
+}
+
+// ================= CREEP SPAWN =================
+function spawnCreep(stage=1){
+  const hp = 20 + wave*8 + stage*15;
+  const g = makeStickman(PATH[0].clone(), 0xe11d48, 0.9);
+  creeps.push({ mesh:g, hp, maxHp:hp, speed:0.02+wave*0.001, wp:0, slowUntil:0 });
+}
+
+function startWave(n){
+  wave = n; spawnCount = 4 + n*3; spawnTimer = 0;
+  document.getElementById('wave').textContent = wave;
+  log(`Wave ${wave} incoming — ${spawnCount} enemies!`, '#22d3ee');
+}
+
+function toggleWaves(){ auto = !auto; log(auto?'Auto-wave ON':'Auto-wave OFF'); }
+
+// ================= TOWERS =================
+function canPlaceAt(p){
+  // disallow directly on path: check distance to nearest path point
+  let min=1e9;
+  for(const pp of pathPoints){ const d=p.distanceTo(pp); if(d<min)min=d; }
+  return min>1.4;
+}
+
+function onCanvasClick(e){
+  const rect=renderer.domElement.getBoundingClientRect();
+  const mx=(e.clientX-rect.left)/rect.width*2-1;
+  const my=-(e.clientY-rect.top)/rect.height*2+1;
+  const ray=new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2(mx,my),camera);
+  // intersect ground plane y=0
+  const plane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
+  const hit=new THREE.Vector3();
+  ray.ray.intersectPlane(plane,hit);
+  if(!hit) return;
+
+  const col=COSTS[selected], nm=TOWER_NAME[selected];
+  if(gold<col){ log(`Not enough gold for ${nm} (${col}g)`, '#f87171'); return; }
+  if(!canPlaceAt(hit)){ log('Too close to the path!', '#f87171'); return; }
+
+  gold-=col; updateHud();
+  const mesh = makeTower(hit, selected);
+  towers.push({ mesh, type:selected, target:null, cd:0 });
+  myLayout.push({ x:Math.round(hit.x), z:Math.round(hit.z), type:selected });
+  log(`${nm} tower placed (${col}g)`, '#4ade80');
+}
+
+function makeTower(pos,type){
+  const g=new THREE.Group();
+  const base=new THREE.Mesh(new THREE.BoxGeometry(1,0.8,1),
+    new THREE.MeshStandardMaterial({color:0x334155}));
+  base.position.y=0.4; base.castShadow=true; g.add(base);
+  let top;
+  if(type===0){ // archer
+    top=new THREE.Mesh(new THREE.ConeGeometry(0.5,1.2,6),
+      new THREE.MeshStandardMaterial({color:0x3b82f6}));
+    top.position.y=1.2;
+  } else if(type===1){ // cannon
+    top=new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.8,0.6,8),
+      new THREE.MeshStandardMaterial({color:0xef4444}));
+    top.position.y=1.0;
+    const barrel=new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.18,1.4,8),
+      new THREE.MeshStandardMaterial({color:0x555}));
+    barrel.position.y=1.6; g.add(barrel);
+  } else { // frost
+    top=new THREE.Mesh(new THREE.OctahedronGeometry(0.7),
+      new THREE.MeshStandardMaterial({color:0x22d3ee, emissive:0x0a3a4a}));
+    top.position.y=1.2;
+  }
+  top.castShadow=true; g.add(top);
+  g.position.copy(pos);
+  scene.add(g);
+  return g;
+}
+
+function selectTower(i){
+  selected=i;
+  document.querySelectorAll('.card').forEach((c,j)=>c.classList.toggle('sel',j===i));
+}
+
+// ================= UPDATE LOOP =================
+function update(dt){
+  // --- spawning ---
+  if(spawnCount>0 && (spawnTimer-=dt)<=0){
+    spawnCreep(); spawnCount--; spawnTimer=Math.max(0.4,1.5-wave*0.08);
+  }
+  // auto-start next wave when cleared
+  if(auto && creeps.length===0 && spawnCount===0 && wave>0){
+    startWave(wave+1);
+  }
+
+  // --- creeps move along path ---
+  for(let i=creeps.length-1;i>=0;i--){
+    const c=creeps[i];
+    let sp=c.speed;
+    if(c.slowUntil>performance.now()/1000) sp*=0.45;
+    c.wp = Math.min(c.wp + sp, pathPoints.length-1);
+    const p=pathPoints[Math.floor(c.wp)];
+    c.mesh.position.copy(p);
+    // orient toward movement
+    if(c.wp<pathPoints.length-1){
+      const next=pathPoints[Math.min(Math.ceil(c.wp),pathPoints.length-1)];
+      c.mesh.lookAt(next.x,0,next.z);
+    }
+    if(c.wp>=pathPoints.length-1){ // reached end
+      scene.remove(c.mesh); creeps.splice(i,1);
+      lives--; updateHud();
+      log('A stickman got through! -1 life','#f87171');
+      if(lives<=0){ endGame(false); return; }
+    }
+  }
+
+  // --- towers shoot ---
+  for(const t of towers){
+    t.cd-=dt;
+    if(t.cd>0) continue;
+    // find nearest in-range creep
+    let best=null,bd=1e9;
+    for(const c of creeps){
+      const d=c.mesh.position.distanceTo(t.mesh.position);
+      if(d<RANGE[t.type] && d<bd){bd=d;best=c;}
+    }
+    if(best){
+      t.target=best; t.cd=FIRE_CD[t.type];
+      fire(t,best);
+    }
+  }
+
+  // --- bullets ---
+  for(let i=bullets.length-1;i>=0;i--){
+    const b=bullets[i];
+    b.life-=dt;
+    if(b.target&&b.target.mesh.parent){
+      const dir=b.target.mesh.position.clone().sub(b.pos);
+      const dist=dir.length();
+      dir.normalize();
+      const step=Math.min(0.5,dist);
+      b.pos.addScaledVector(dir,step);
+      b.mesh.position.copy(b.pos);
+      if(dist<0.6){
+        // hit
+        const dmg=DMG[b.type]*(Math.random()*0.3+0.85);
+        b.target.hp-=dmg;
+        if(b.type===2) b.target.slowUntil=performance.now()/1000+1.5;
+        if(b.target.hp<=0){
+          gold+=Math.floor(12+wave*2); updateHud();
+          spawnPuff(b.target.mesh.position);
+          scene.remove(b.target.mesh);
+          creeps.splice(creeps.indexOf(b.target),1);
+        }
+        scene.remove(b.mesh); bullets.splice(i,1);
+        continue;
+      }
+    } else {
+      scene.remove(b.mesh); bullets.splice(i,1);
+    }
+    if(b.life<=0){ scene.remove(b.mesh); bullets.splice(i,1); }
+  }
+}
+
+function fire(t,creep){
+  const mat = t.type===2
+    ? new THREE.MeshStandardMaterial({color:0x7dd3fc,emissive:0x1d4ed8})
+    : new THREE.MeshStandardMaterial({color:t.type===0?0xfde047:0xf97316,emissive:0x7a3b00});
+  const s=t.type===1?0.22:0.12;
+  const mesh=new THREE.Mesh(new THREE.SphereGeometry(s),mat);
+  mesh.position.copy(t.mesh.position).add(new THREE.Vector3(0,1.2,0));
+  scene.add(mesh);
+  bullets.push({mesh,pos:mesh.position.clone(),target:creep,type:t.type,life:3});
+}
+
+function spawnPuff(pos){
+  const p=new THREE.Mesh(new THREE.SphereGeometry(0.3),
+    new THREE.MeshBasicMaterial({color:0xff0000,transparent:true,opacity:.7}));
+  p.position.copy(pos).add(new THREE.Vector3(0,0.8,0));
+  scene.add(p);
+  setTimeout(()=>scene.remove(p),250);
+}
+
+function updateHud(){
+  document.getElementById('gold').textContent=gold;
+  document.getElementById('lives').textContent=lives;
+}
+
+function log(msg,color='#9ca3af'){
+  const el=document.createElement('div');
+  el.textContent=msg; el.style.color=color;
+  document.getElementById('log').prepend(el);
+}
+
+function endGame(win){
+  auto=false;
+  log(win?'🏆 VICTORY!':'💀 DEFEAT — base overrun','#f59e0b');
+  if(socket) socket.emit('attackResult',{roomId:curRoom, wavesSurvived:wave});
+}
+
+// ================= PVP =================
+let curRoom=null;
+function connectPvp(){
+  socket=io(); // same origin as server
+  socket.on('queued',()=>log('Searching for opponent…','#22d3ee'));
+  socket.on('match',({roomId})=>{
+    curRoom=roomId; inPvp=true;
+    log(`MATCH FOUND! Room ${roomId}. Build your base, then send it to battle.`,'#4ade80');
+    document.getElementById('pvpBtn').textContent='📤 Send Base to Battle';
+    document.getElementById('pvpBtn').onclick=sendBase;
+  });
+  socket.on('enemyLayout',({layout})=>{
+    // In real game: load enemy layout, run opponent's waves against YOUR towers.
+    // Demo: just report.
+    log(`Received enemy base layout (${layout.length} towers). Simulate attack…`,'#fbbf24');
+  });
+  socket.on('gameOver',({winner,scores})=>{
+    log(`GAME OVER — winner ${winner} | scores A:${scores.sA} B:${scores.sB}`,'#f59e0b');
+  });
+  socket.on('opponentLeft',()=>log('Opponent disconnected','#f87171'));
+}
+function pvpMatch(){
+  if(!socket) connectPvp();
+  socket.emit('findMatch');
+  log('Queuing for PVP…','#22d3ee');
+}
+function sendBase(){
+  socket.emit('submitLayout',{layout:myLayout});
+  log('Base submitted to battle!','#4ade80');
+}
+
+// ================= MODES =================
+function modeSolo(){
+  if(socket){ try{socket.disconnect();}catch(e){} }
+  startWave(1); auto=true;
+  log('SOLO mode. Defend as long as you can!','#22d3ee');
+}
+
+// ================= LOOP =================
+let last=performance.now();
+function animate(){
+  requestAnimationFrame(animate);
+  const now=performance.now();
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  update(dt);
+  renderer.render(scene,camera);
+}
+function onResize(){
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+}
+
+init();
+</script>
+</body>
+</html>
