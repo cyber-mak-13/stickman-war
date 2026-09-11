@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stickman War</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="hud">
+    <div class="hud-row">
+      <span id="gold">💰 100</span>
+      <span id="era">⚔ Era 1</span>
+      <span id="mode">🤖 PvE</span>
+    </div>
+    <div class="hud-row" id="spawn-buttons">
+      <button data-spawn="miner">Miner (30)</button>
+      <button data-spawn="melee">Melee (25)</button>
+      <button data-spawn="ranged">Ranged (40)</button>
+      <button data-spawn="tank">Tank (120)</button>
+    </div>
+    <div class="hud-row">
+      <button id="build-turret">🔫 Turret (100)</button>
+      <button id="upgrade-era">⬆ Upgrade Era</button>
+      <button id="toggle-mode">🔁 Switch Mode</button>
+      <button id="restart">⟲ Restart</button>
+    </div>
+  </div>
+
+  <canvas id="game" width="1280" height="480"></canvas>
+
+  <div id="admin-panel" class="hidden">
+    <header>
+      <h2>🛠 Admin Panel</h2>
+      <button id="admin-close">✕</button>
+    </header>
+    <div class="admin-body">
+      <div class="admin-section">
+        <h3>Gold</h3>
+        <label>Player: <input id="admin-gold-player" type="number" value="100"></label>
+        <label>Enemy: <input id="admin-gold-enemy" type="number" value="100"></label>
+        <button id="admin-set-gold">Set Gold</button>
+        <button id="admin-add-gold-1000">+1000 Both</button>
+      </div>
+
+      <div class="admin-section">
+        <h3>Era</h3>
+        <label>Player Era: <input id="admin-era-player" type="number" value="1" min="1" max="5"></label>
+        <label>Enemy Era: <input id="admin-era-enemy" type="number" value="1" min="1" max="5"></label>
+        <button id="admin-set-era">Set Era</button>
+      </div>
+
+      <div class="admin-section">
+        <h3>Health</h3>
+        <button id="admin-heal-all">Heal All Bases</button>
+        <button id="admin-insta-win">Instant Win</button>
+        <button id="admin-insta-lose">Instant Lose</button>
+      </div>
+
+      <div class="admin-section">
+        <h3>Entities</h3>
+        <button id="admin-clear-enemies">Clear Enemy Units</button>
+        <button id="admin-clear-all">Clear All Units</button>
+        <button id="admin-spawn-melee">Spawn Player Melee</button>
+        <button id="admin-spawn-tank">Spawn Player Tank</button>
+      </div>
+
+      <div class="admin-section">
+        <h3>Game Speed</h3>
+        <label>Speed: <input id="admin-speed" type="range" min="0.25" max="4" step="0.25" value="1"></label>
+        <span id="admin-speed-value">1x</span>
+      </div>
+
+      <div class="admin-section">
+        <h3>Debug</h3>
+        <label><input id="admin-show-range" type="checkbox"> Show attack ranges</label>
+        <label><input id="admin-godmode" type="checkbox"> Player God Mode (no damage)</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Load order matters: utils & data first, then entities, systems, UI, game, main -->
+  <script src="js/utils/math.js"></script>
+  <script src="js/utils/storage.js"></script>
+  <script src="js/data/unitData.js"></script>
+  <script src="js/entities/entity.js"></script>
+  <script src="js/entities/base.js"></script>
+  <script src="js/entities/unit.js"></script>
+  <script src="js/entities/turret.js"></script>
+  <script src="js/entities/projectile.js"></script>
+  <script src="js/systems/economy.js"></script>
+  <script src="js/systems/upgrade.js"></script>
+  <script src="js/systems/ai.js"></script>
+  <script src="js/systems/admin.js"></script>
+  <script src="js/ui/hud.js"></script>
+  <script src="js/ui/adminPanel.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
